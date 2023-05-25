@@ -1,0 +1,3 @@
+[submodule "packages/discogs-xml2db"]
+	path = packages/discogs-xml2db
+	url = https://github.com/philipmat/discogs-xml2db

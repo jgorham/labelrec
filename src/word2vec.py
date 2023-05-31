@@ -1,5 +1,6 @@
 import json
 import os
+from random import shuffle
 
 import click
 import numpy as np
@@ -7,28 +8,8 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
-
-from torch.utils.data import DataLoader, Dataset
-
-
-def _join_features(rel_art_df, rel_lab_df, lab_df):
-    # get release_id => label_id
-    res_df = pd.merge(
-        rel_lab_df[['release_id', 'label_name']].drop_duplicates(),
-        lab_df[['id', 'name']].rename(columns=lambda col: f'label_{col}'),
-        on=['label_name'],
-    )
-    res_df = res_df[['release_id', 'label_id']]
-    # join in artist_id
-    res_df = pd.merge(
-        res_df,
-        rel_art_df[['release_id', 'artist_id']],
-        on=['release_id'],
-    )
-    # get artist idx mapping
-    art_emb_idx = {int(v): i for i,v in enumerate(np.sort(res_df['artist_id'].unique()))}
-    lab_emb_idx = {int(v): i for i,v in enumerate(np.sort(res_df['label_id'].unique()))}
-    return res_df, art_emb_idx, lab_emb_idx
+from torch.utils.data import DataLoader, IterableDataset
+from tqdm import tqdm
 
 
 # Define the Word2Vec model
@@ -38,8 +19,8 @@ class Word2Vec(nn.Module):
         self.n_artists = n_artists
         self.n_labels = n_labels
         self.embedding_dim = embedding_dim
-        self.art_embed = nn.Embedding(self.n_artists, self.embedding_dim)
-        self.lab_embed = nn.Embedding(self.n_labels, self.embedding_dim)
+        self.art_embed = nn.Embedding(self.n_artists, self.embedding_dim, dtype=torch.float32)
+        self.lab_embed = nn.Embedding(self.n_labels, self.embedding_dim, dtype=torch.float32)
         self.init_weights()
 
     def init_weights(self):
@@ -80,41 +61,39 @@ class NoiseContrastiveLoss(nn.Module):
 
 
 # Custom dataset class for Word2Vec
-class Word2VecDataset(Dataset):
-    def __init__(self, data, artist_emb_idx, label_emb_idx):
-        self.data = data
-        self.artist_emb_idx = artist_emb_idx
-        self.label_emb_idx = label_emb_idx
+class Word2VecDataset(IterableDataset):
+    def __init__(self, root_dir, art_emb_idx, lab_emb_idx):
+        self.root_dir = root_dir
+        self.art_emb_idx = art_emb_idx
+        self.lab_emb_idx = lab_emb_idx
+        self.file_paths = self._get_file_paths()
 
-    def __getitem__(self, index):
-        artist_id = self.artist_emb_idx[self.data[index][0]]
-        label_id = self.label_emb_idx[self.data[index][1]]
-        return artist_id, label_id
+    def __iter__(self):
+        file_paths = [f for f in self.file_paths]
+        shuffle(file_paths)
+        for file_path in tqdm(file_paths):
+            data = pd.read_csv(file_path).sample(frac=1, replace=False)
+            data['artist_id'] = data['artist_id'].apply(lambda xx: self.art_emb_idx[xx])
+            data['label_id'] = data['label_id'].apply(lambda xx: self.lab_emb_idx[xx])
+            data = data[['release_id', 'artist_id', 'label_id']]
+            for i in range(len(data)):
+                yield data.iloc[i].values.tolist()
 
-    def __len__(self):
-        return len(self.data)
+    def _get_file_paths(self):
+        file_paths = []
+        for root, _, files in os.walk(self.root_dir):
+            for file in files:
+                if file.endswith('.csv'):
+                    file_path = os.path.join(root, file)
+                    file_paths.append(file_path)
+        return file_paths
 
 
 @click.command()
 @click.option(
-    '--release_file',
+    '--training_data_dir',
     type=str,
-    help='Csv file that contains all the releases in the corpus.',
-)
-@click.option(
-    '--release_artist_file',
-    type=str,
-    help='Csv file that contains all the artists with a release in the corpus.',
-)
-@click.option(
-    '--release_label_file',
-    type=str,
-    help='Csv file that contains all the labels with a release in the corpus.',
-)
-@click.option(
-    '--label_file',
-    type=str,
-    help='Csv file that contains all the labels with a release in the corpus.',
+    help='Directory that contains features generated for training.',
 )
 @click.option(
     '--device',
@@ -143,7 +122,7 @@ class Word2VecDataset(Dataset):
 @click.option(
     '--batch_size',
     type=int,
-    default=32,
+    default=128,
     help='The batch size of a gradient step.',
 )
 @click.option(
@@ -160,10 +139,7 @@ class Word2VecDataset(Dataset):
 )
 @click.argument('output_dir', type=str, nargs=1)
 def cli(
-    release_file,
-    release_artist_file,
-    release_label_file,
-    label_file,
+    training_data_dir,
     device,
     embedding_dim,
     n_epochs,
@@ -175,23 +151,25 @@ def cli(
 ):
     """Apply word2vec on the corpus of release data."""
 
-    # rel_df = pd.read_csv(release_file)
-    rel_art_df = pd.read_csv(release_artist_file)
-    rel_lab_df = pd.read_csv(release_label_file)
-    lab_df = pd.read_csv(label_file)
-
     # preprocess data
-    res_df, art_emb_idx, lab_emb_idx = _join_features(rel_art_df, rel_lab_df, lab_df)
+    with open(os.path.join(training_data_dir, 'art_emb_idx.json'), 'r') as fh:
+        art_emb_idx = json.load(fh)
+        art_emb_idx = {int(k): v for k, v in art_emb_idx.items()}
+
+    with open(os.path.join(training_data_dir, 'lab_emb_idx.json'), 'r') as fh:
+        lab_emb_idx = json.load(fh)
+        lab_emb_idx = {int(k): v for k, v in lab_emb_idx.items()}
+
     n_artists = len(art_emb_idx)
     n_labels = len(lab_emb_idx)
 
     # get training data
     dataset = Word2VecDataset(
-        res_df[['artist_id', 'label_id']].values,
+        training_data_dir,
         art_emb_idx,
         lab_emb_idx,
     )
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
+    dataloader = DataLoader(dataset, batch_size=batch_size, drop_last=True)
 
     # construct model
     model = Word2Vec(n_artists, n_labels, embedding_dim)
@@ -203,7 +181,7 @@ def cli(
     # training loop
     for epoch in range(n_epochs):
         total_loss = 0.0
-        for artist_idx, label_idx in dataloader:
+        for release_idx, artist_idx, label_idx in dataloader:
             noise_idxs = torch.multinomial(
                 input=torch.ones(n_labels),
                 num_samples=batch_size * n_negative_samples,
@@ -228,11 +206,11 @@ def cli(
     os.makedirs(output_dir, exist_ok=True)
     torch.save(model.state_dict(), os.path.join(output_dir, 'embedding.model'))
 
-    with open(os.path.join(output_dir, 'art_emb_idx.json'), 'w') as fh:
-        json.dump(art_emb_idx, fh)
+    with open(os.path.join(output_dir, 'art_emb_idx_inv.json'), 'w') as fh:
+        json.dump({v: k for k, v in art_emb_idx.items()}, fh)
 
-    with open(os.path.join(output_dir, 'lab_emb_idx.json'), 'w') as fh:
-        json.dump(lab_emb_idx, fh)
+    with open(os.path.join(output_dir, 'lab_emb_idx_inv.json'), 'w') as fh:
+        json.dump({v: k for k, v in lab_emb_idx.items()}, fh)
 
 
 if __name__ == "__main__":

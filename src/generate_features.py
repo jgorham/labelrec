@@ -7,13 +7,20 @@ import numpy as np
 import pandas as pd
 
 
-def _drop_singletons(df, colname):
+def _drop_outliers(df, colname, min_val=None, max_val=None):
     counts = df[colname].value_counts()
-    counts = counts[counts > 1].index.to_frame(name=colname).reset_index(drop=True)
+
+    if min_val is not None:
+        counts = counts[counts >= min_val]
+
+    if max_val is not None:
+        counts = counts[counts <= max_val]
+
+    counts = counts.index.to_frame(name=colname).reset_index(drop=True)
     return pd.merge(df, counts, on=[colname])
 
 
-def _join_features(rel_art_df, rel_lab_df, lab_df, drop_singletons=True):
+def _join_features(rel_art_df, rel_lab_df, lab_df, drop_outliers=True):
     # get release_id => label_id
     res_df = pd.merge(
         rel_lab_df[['release_id', 'label_name']],
@@ -27,9 +34,9 @@ def _join_features(rel_art_df, rel_lab_df, lab_df, drop_singletons=True):
         rel_art_df[['release_id', 'artist_id']],
         on=['release_id'],
     )
-    if drop_singletons:
-        res_df = _drop_singletons(res_df, 'artist_id')
-        res_df = _drop_singletons(res_df, 'label_id')
+    if drop_outliers:
+        res_df = _drop_outliers(res_df, 'label_id', min_val=2, max_val=1000)
+        res_df = _drop_outliers(res_df, 'artist_id', min_val=2)
 
     # get artist idx mapping
     art_emb_idx = {int(v): i for i,v in enumerate(np.sort(res_df['artist_id'].unique()))}
@@ -82,11 +89,11 @@ def cli(
     # read in genre data
     rel_genre_df = pd.read_csv(release_genre_file)
     # read in artist data, subset to genre data immediately
-    rel_art_df = pd.read_csv(release_artist_file, usecols=['release_id', 'artist_id'])
-    rel_art_df = pd.merge(rel_genre_df, rel_art_df, on=['release_id']).drop_duplicates()
+    rel_art_df = pd.read_csv(release_artist_file, usecols=['release_id', 'artist_id']).drop_duplicates()
+    rel_art_df = pd.merge(rel_genre_df, rel_art_df, on=['release_id'])
     # read in label data, subset to genre data immediately
-    rel_lab_df = pd.read_csv(release_label_file, usecols=['release_id', 'label_name'])
-    rel_lab_df = pd.merge(rel_genre_df, rel_lab_df, on=['release_id']).drop_duplicates()
+    rel_lab_df = pd.read_csv(release_label_file, usecols=['release_id', 'label_name']).drop_duplicates()
+    rel_lab_df = pd.merge(rel_genre_df, rel_lab_df, on=['release_id'])
     # finally read in label data and delete the genre data
     lab_df = pd.read_csv(label_file, usecols=['id', 'name'])
 

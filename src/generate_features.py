@@ -93,6 +93,9 @@ def cli(
     # preprocess data
     res_df, art_emb_idx, lab_emb_idx = _join_features(rel_art_df, rel_lab_df, lab_df)
 
+    # shuffle data
+    res_df = res_df.sample(frac=1.0, replace=False)
+
     # Save the embedding mappings and final csv
     os.makedirs(output_dir, exist_ok=True)
 

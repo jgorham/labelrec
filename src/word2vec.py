@@ -75,9 +75,9 @@ class Word2VecDataset(IterableDataset):
             data = pd.read_csv(file_path).sample(frac=1, replace=False)
             data['artist_id'] = data['artist_id'].apply(lambda xx: self.art_emb_idx[xx])
             data['label_id'] = data['label_id'].apply(lambda xx: self.lab_emb_idx[xx])
-            data = data[['release_id', 'artist_id', 'label_id']]
-            for i in range(len(data)):
-                yield data.iloc[i].values.tolist()
+            values = data[['release_id', 'artist_id', 'label_id']].values.tolist()
+            for row in values:
+                yield row
 
     def _get_file_paths(self):
         file_paths = []
@@ -122,7 +122,7 @@ class Word2VecDataset(IterableDataset):
 @click.option(
     '--batch_size',
     type=int,
-    default=128,
+    default=256,
     help='The batch size of a gradient step.',
 )
 @click.option(

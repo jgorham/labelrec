@@ -134,7 +134,7 @@ class Word2VecDataset(IterableDataset):
 @click.option(
     '--embedding_reg',
     type=float,
-    default=1e-6,
+    default=5e-7,
     help='The regularization applied to all embedding vectors.',
 )
 @click.argument('output_dir', type=str, nargs=1)
@@ -181,6 +181,7 @@ def cli(
     # training loop
     for epoch in range(n_epochs):
         total_loss = 0.0
+        n_batches = 0
         for release_idx, artist_idx, label_idx in dataloader:
             noise_idxs = torch.multinomial(
                 input=torch.ones(n_labels),
@@ -199,8 +200,9 @@ def cli(
             optimizer.step()
 
             total_loss += loss.item()
+            n_batches += 1
 
-        print("Epoch {}, Loss: {:.4f}".format(epoch+1, total_loss / len(dataloader)))
+        print("Epoch {}, Loss: {:.4f}".format(epoch + 1, total_loss / n_batches))
 
     # Save the model and the embedding mappings
     os.makedirs(output_dir, exist_ok=True)

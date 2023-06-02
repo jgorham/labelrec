@@ -102,6 +102,11 @@ class Word2VecDataset(IterableDataset):
     help='Device to train on.'
 )
 @click.option(
+    '--from-model',
+    type=str,
+    help='Previous model to use for a warm start..'
+)
+@click.option(
     '--embedding_dim',
     type=int,
     default=128,
@@ -141,6 +146,7 @@ class Word2VecDataset(IterableDataset):
 def cli(
     training_data_dir,
     device,
+    from_model,
     embedding_dim,
     n_epochs,
     n_negative_samples,
@@ -173,6 +179,9 @@ def cli(
 
     # construct model
     model = Word2Vec(n_artists, n_labels, embedding_dim)
+    if from_model is not None:
+        from_state_dict = torch.load(from_model)
+        model.load_state_dict(from_state_dict)
 
     # Define the loss function and the optimizer
     criterion = NoiseContrastiveLoss(embedding_reg=embedding_reg)

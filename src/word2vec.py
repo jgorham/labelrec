@@ -102,7 +102,7 @@ class Word2VecDataset(IterableDataset):
     help='Device to train on.'
 )
 @click.option(
-    '--from-model',
+    '--from_model',
     type=str,
     help='Previous model to use for a warm start..'
 )

@@ -32,11 +32,12 @@ class Word2Vec(nn.Module):
         art_embeds = self.art_embed(artist_idx)
         lab_embeds = self.lab_embed(label_idx)
         noise_embeds = self.lab_embed(noise_idxs)
-        embed_norm = (
-            torch.mean(torch.pow(art_embeds, 2.0))
-            + torch.mean(torch.pow(lab_embeds, 2.0))
-        )
-
+        all_embeds = torch.cat([
+            art_embeds[:, None],
+            lab_embeds[:, None],
+            noise_embeds,
+        ], axis=1)
+        embed_norm = torch.mean(torch.pow(all_embeds, 2.0))
         scores = (art_embeds * lab_embeds).sum(axis=1, keepdims=True)
         noise_scores = (art_embeds[:, None] * noise_embeds).sum(axis=2)
         return scores, noise_scores, embed_norm
@@ -48,15 +49,16 @@ class NoiseContrastiveLoss(nn.Module):
     def __init__(self, embedding_reg = 0.0):
         super(NoiseContrastiveLoss, self).__init__()
         self.embedding_reg = embedding_reg
+        self.sigmoid = nn.Sigmoid()
+        self.bce_loss = nn.BCELoss()
 
     def forward(self, scores, noise_scores, embed_norm):
-        batch_size = scores.size(0)
-        true_noise_logits = torch.cat([scores, noise_scores], dim=1)
-        true_noise_labels = torch.cat([
+        pred_probs = self.sigmoid(torch.cat([scores, noise_scores], dim=1))
+        true_labels = torch.cat([
             torch.ones(scores.shape),
             torch.zeros(noise_scores.shape),
         ], dim=1).to(scores.device)
-        loss = nn.CrossEntropyLoss()(true_noise_logits, true_noise_labels) + self.embedding_reg * embed_norm
+        loss = self.bce_loss(pred_probs, true_labels) + self.embedding_reg * embed_norm
         return loss
 
 
@@ -121,7 +123,7 @@ class Word2VecDataset(IterableDataset):
 @click.option(
     '--n_negative_samples',
     type=int,
-    default=10,
+    default=5,
     help='The number of negative samples per positive sample in NCE loss.',
 )
 @click.option(
@@ -139,7 +141,7 @@ class Word2VecDataset(IterableDataset):
 @click.option(
     '--embedding_reg',
     type=float,
-    default=5e-7,
+    default=1e-3,
     help='The regularization applied to all embedding vectors.',
 )
 @click.argument('output_dir', type=str, nargs=1)

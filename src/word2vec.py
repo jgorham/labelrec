@@ -28,10 +28,10 @@ class Word2Vec(nn.Module):
         self.art_embed.weight.data.uniform_(-init_range, init_range)
         self.lab_embed.weight.data.uniform_(-init_range, init_range)
 
-    def forward(self, artist_idx, label_idx, noise_idxs):
+    def forward(self, artist_idx, label_idx, noise_idxs, neg_sampling_label=True):
         art_embeds = self.art_embed(artist_idx)
         lab_embeds = self.lab_embed(label_idx)
-        noise_embeds = self.lab_embed(noise_idxs)
+        noise_embeds = self.lab_embed(noise_idxs) if neg_sampling_label else self.art_embed(noise_idxs)
         all_embeds = torch.cat([
             art_embeds[:, None],
             lab_embeds[:, None],
@@ -39,7 +39,9 @@ class Word2Vec(nn.Module):
         ], axis=1)
         embed_norm = torch.mean(torch.pow(all_embeds, 2.0))
         scores = (art_embeds * lab_embeds).sum(axis=1, keepdims=True)
-        noise_scores = (art_embeds[:, None] * noise_embeds).sum(axis=2)
+        noise_scores = (
+            (art_embeds[:, None] if neg_sampling_label else lab_embeds[:, None]) * noise_embeds
+        ).sum(axis=2)
         return scores, noise_scores, embed_norm
 
 
@@ -135,7 +137,7 @@ class Word2VecDataset(IterableDataset):
 @click.option(
     '--learning_rate',
     type=float,
-    default=1e-3,
+    default=2e-3,
     help='The learning rate for SGD.',
 )
 @click.option(
@@ -194,8 +196,9 @@ def cli(
         total_loss = 0.0
         n_batches = 0
         for release_idx, artist_idx, label_idx in dataloader:
+            neg_sampling_label = np.random.choice([True, False])
             noise_idxs = torch.multinomial(
-                input=torch.ones(n_labels),
+                input=torch.ones(n_labels if neg_sampling_label else n_artists),
                 num_samples=batch_size * n_negative_samples,
                 replacement=True,
             ).view((batch_size, n_negative_samples))
@@ -205,7 +208,7 @@ def cli(
             noise_idxs = noise_idxs.to(device)
 
             optimizer.zero_grad()
-            scores, noise_scores, embed_norm = model(artist_idx, label_idx, noise_idxs)
+            scores, noise_scores, embed_norm = model(artist_idx, label_idx, noise_idxs, neg_sampling_label=neg_sampling_label)
             loss = criterion(scores, noise_scores, embed_norm)
             loss.backward()
             optimizer.step()
